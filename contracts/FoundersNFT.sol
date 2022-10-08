@@ -7,7 +7,6 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
-error CallerIsContract(address address_);
 error ExceedingMaxTokensPerWallet(uint16 maxPerWallet);
 error ExceedingAllowlistAllowance(uint16 allowlistAllowance);
 error InsufficientFunds(uint256 funds, uint256 cost);
@@ -15,7 +14,6 @@ error InsufficientSupplyAvailable(uint256 maxSupply);
 error InvalidAllowlistId(uint8 allowlistId);
 error InvalidAllowlistPhase(uint8 allowlistPhase);
 error InvalidAllowlistAllowance(uint8 allowlistAllowance);
-error InvalidAllowlistTime();
 error TokenDoesNotExist(uint16 tokenId);
 error MaxTotalSupplyCannotBeLessThanAlreadyMinted();
 error NotAllowlisted();
@@ -23,6 +21,7 @@ error SaleNotActive();
 error URIQueryForNonexistentToken();
 error UnableToSendChange(uint256 cashChange);
 error UnableToWithdraw(uint256 amount);
+error NoContracts();
 
 contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
     using Address for address;
@@ -38,6 +37,11 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
     struct AllowlistProof {
         uint8 allowlist_id;
         bytes32[] proof;
+    }
+    
+     modifier callerIsUser() {
+        if (msg.sender != tx.origin) revert NoContracts();
+        ;
     }
 
     uint8 private constant OMNIPOTENT_MINT = 1;
@@ -103,7 +107,7 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
         address _to,
         uint16 _mintAmount
     ) external onlyRole(DEFAULT_ADMIN_ROLE) validateMint(_mintAmount, maxTotalSupply) {
-        _safeMint(_to, _mintAmount);
+        _mint(_to, _mintAmount);
     }
 
     function _startTokenId() internal pure override returns (uint256) {
@@ -127,10 +131,8 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
         uint8 _mintPhase,
         uint256 _startTime,
         uint256 _endTime
-    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (_startTime >= _endTime) {
-            revert InvalidAllowlistTime();
-        }
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_startTime < _endTime, " Invalid Allowlist Time!");
         if (_mintPhase == OMNIPOTENT_MINT) {
             if (_allowance > maxOmnipotentMintsPerWallet) {
                 revert InvalidAllowlistAllowance({
@@ -153,15 +155,15 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
         allowlists[_allowlistId] = Allowlist(_root, _startTime, _endTime, _allowance, _mintPhase);
     }
 
-    function removeAllowlist(uint8 _id) public onlyRole(DEFAULT_ADMIN_ROLE) {
+    function removeAllowlist(uint8 _id) external onlyRole(DEFAULT_ADMIN_ROLE) {
         delete allowlists[_id];
     }
 
     /**
      * @notice Public mint function for omnipotent key mint phase
      */
-    function omnipotentMint() public payable validateMint(1, maxOmnipotentSupply) nonReentrant {
-        if (_numberMinted(msg.sender) >= maxOmnipotentMintsPerWallet) {
+    function omnipotentMint() external payable validateMint(1, maxOmnipotentSupply) callerIsUser {
+        if (_numberMinted(msg.sender) + 1 > maxOmnipotentMintsPerWallet) {
             revert ExceedingMaxTokensPerWallet({
                 maxPerWallet: maxOmnipotentMintsPerWallet
             });
@@ -176,7 +178,7 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
      * @notice Public mint function for founders key mint phase
      * @param _mintAmount The amount of tokens to mint.
      */
-    function foundersMint(uint8 _mintAmount) public payable validateMint(_mintAmount, maxTotalSupply) nonReentrant {
+    function foundersMint(uint8 _mintAmount) external payable validateMint(_mintAmount, maxTotalSupply) callerIsUser {
         _setAux(msg.sender, _getAux(msg.sender) + _mintAmount);
         if (_getAux(msg.sender) > maxFoundersMintsPerWallet) {
             revert ExceedingMaxTokensPerWallet({
@@ -193,9 +195,9 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
      * @notice Whilitest mint for the omnipotent key mint phase.
      * @param _proof The allowlist proof of sender address.
      */
-    function omnipotentAllowlistMint(AllowlistProof calldata _proof) public payable validateMint(1, maxOmnipotentSupply) nonReentrant {
+    function omnipotentAllowlistMint(AllowlistProof calldata _proof) external payable validateMint(1, maxOmnipotentSupply) callerIsUser {
         Allowlist memory allowlist = allowlists[_proof.allowlist_id];
-        if (block.timestamp >= allowlist.endTime || block.timestamp < allowlist.startTime ) {
+        if (block.timestamp >= allowlist.endTime || block.timestamp < allowlist.startTime ) { //more gas effcient alternative: require(block.timestamp - 1< allowlist.endTime || block.timestamp > allowlist.startTime, "Sale is not active!")
             revert SaleNotActive();
         }
 
@@ -212,9 +214,9 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
      * @param _mintAmount The amount of tokens to mint.
      * @param _proof The allowlist proof of sender address.
      */
-    function foundersAllowlistMint(uint8 _mintAmount, AllowlistProof calldata _proof) public payable validateMint(_mintAmount, maxTotalSupply) nonReentrant {
+    function foundersAllowlistMint(uint8 _mintAmount, AllowlistProof calldata _proof) external payable validateMint(_mintAmount, maxTotalSupply) callerIsUser {
         Allowlist memory allowlist = allowlists[_proof.allowlist_id];
-        if (block.timestamp >= allowlist.endTime || block.timestamp < allowlist.startTime ) {
+        if (block.timestamp >= allowlist.endTime || block.timestamp < allowlist.startTime ) { //more gas effcient alternative: require(block.timestamp - 1< allowlist.endTime || block.timestamp > allowlist.startTime, "Sale is not active!")
             revert SaleNotActive();
         }
 
@@ -225,7 +227,7 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
         _allowlistCheckAndMint(_mintAmount, allowlist.root, _proof);
     }
 
-    function _allowlistCheckAndMint(uint8 _mintAmount, bytes32 _root, AllowlistProof calldata _proof) internal {
+    function _allowlistCheckAndMint(uint8 _mintAmount, bytes32 _root, AllowlistProof calldata _proof) private {
         if (!MerkleProof.verify(_proof.proof, _root, keccak256(abi.encodePacked(msg.sender)))) {
             revert NotAllowlisted();
         }
@@ -234,9 +236,7 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
     }
 
     function _omnipotentAllowlistMintCheck() internal view {
-        if (_numberMinted(msg.sender) >= 1) {
-            revert ExceedingAllowlistAllowance({allowlistAllowance: 1});
-        }
+       require(_numberMinted(msg.sender) < 1, " Exceeding Allowlist Allowance!")
     }
 
     function _foundersAllowlistMintCheck(uint8 _mintAmount, uint8 _allowance) internal {
@@ -247,18 +247,11 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
         }
     }
 
-    function _internalMint(uint8 _mintAmount) internal {
+    function _internalMint(uint8 _mintAmount) private {
         uint256 totalPrice = _mintAmount * mintPrice;
-        if (msg.value < totalPrice) {
+        if (msg.value != totalPrice) {
             revert InsufficientFunds(msg.value, totalPrice);
         }
-
-        if (msg.value > totalPrice) {
-            uint256 excess = msg.value - mintPrice;
-            (bool returned, ) = msg.sender.call{ value: excess }("");
-            if (!returned) { revert UnableToSendChange({cashChange: excess}); }
-        }
-
         _mint(msg.sender, _mintAmount);
     }
 
@@ -295,7 +288,7 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
                 : "";
     }
 
-    function withdraw() external onlyRole(WITHDRAW_ROLE) {
+    function withdraw() external onlyRole(WITHDRAW_ROLE) nonReentrant {
         (bool success, ) = msg.sender.call{value: address(this).balance}("");
         if (!success) { revert UnableToWithdraw({amount: address(this).balance});}
     }
@@ -360,9 +353,7 @@ contract FoundersNFT is ERC721A, AccessControl, ReentrancyGuard {
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
-        if (_maxTotalSupply <= _totalMinted()) {
-            revert MaxTotalSupplyCannotBeLessThanAlreadyMinted();
-        }
+        require(_maxTotalSupply > _totalMinted(), "Max Total Supply Cannot Be Less Than Already Minted");
         maxTotalSupply = _maxTotalSupply;
     }
 
